@@ -14,11 +14,11 @@ I use `unatatp` to transparently improve TCP performance in my VPN gateway.
 I use UDP-based VPN to access the Internet from China
 (because [TCP-over-TCP is a bad idea](http://sites.inka.de/bigred/devel/tcp-tcp.html)
 and I don't like application-level proxy solution since it cannot be applied globally to all traffics).
-The VPN link is lossy so the performance (network throughput) isn't ideal.
-Modern TCP congestion control algorithms like BBR can greatly improve the situation
+My VPN link is lossy so the performance (network throughput) isn't ideal.
+Modern TCP congestion control algorithms like BBR can greatly improve this situation
 but it needs to be deployed in the server endpoint.
 Using `unatatp` in the VPN gateway, the TCP CC algorithm being used on the VPN link
-is essentially the one in the VPN gateway which is under my own control and
+is essentially the one in the VPN gateway, which is under my own control and
 can improve the overall performance.
 
 ![network diagram](./docs/unatatp.png)
@@ -32,7 +32,11 @@ Build and run unatatp:
 
 ```
 go build
-./unatatp -p 9999
+./unatatp -port 9999
+# Or to use systemctl:
+cp unatatp /usr/local/bin/
+cp unatatp@.service /etc/systemd/system/
+systemctl start unatatp@9999
 ```
 
 Configure system:
@@ -49,7 +53,7 @@ iptables -t mangle -A PREROUTING -m socket --transparent -j MARK --set-mark 0x10
 
 ### Limitations
 
-This is a NAT instead of a full transparent proxy. Full transparent forward
+This is a NAT instead of a full transparent proxy. Full transparent
 can be supported using IP_TRANSPARENT in outgoing socket, but I don't need it in my use case.
 It may be supported in the future.
 

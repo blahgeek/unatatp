@@ -1,0 +1,14 @@
+[Unit]
+Description=Userspace NAT is Also a TCP (Transparent) Proxy
+After=network-online.target
+
+[Service]
+Type=simple
+CapabilityBoundingSet=CAP_NET_ADMIN
+ExecStart=/usr/local/bin/unatatp -port %i
+Restart=always
+RestartSec=30
+StartLimitBurst=10
+
+[Install]
+WantedBy=multi-user.target
