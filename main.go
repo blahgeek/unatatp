@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"sync/atomic"
 	"syscall"
 
 	log "github.com/sirupsen/logrus"
@@ -56,7 +57,7 @@ func HandleTCPConnection(conn *net.TCPConn, conn_id int64) {
 
 	log.Debug("New tcp connection, making next connection...")
 
-	conn_next, err := net.DialTCP("tcp4", nil, addr_dst)
+	conn_next, err := net.DialTCP("tcp", nil, addr_dst)
 	if err != nil {
 		log.WithError(err).Error("DialTCP")
 		return
@@ -75,6 +76,39 @@ func HandleTCPConnection(conn *net.TCPConn, conn_id int64) {
 	log.Debug("Connection closed")
 }
 
+func ServeForever(listen_addr string, conn_id *int64) {
+	listenaddr, err := net.ResolveTCPAddr("tcp", listen_addr)
+	if err != nil {
+		log.WithError(err).Fatal("ResolveTCPAddr")
+	}
+
+	listener, err := net.ListenTCP("tcp", listenaddr)
+	if err != nil {
+		log.WithError(err).Fatal("ListenTCP")
+	}
+	defer listener.Close()
+	log.Info("Listening on ", listener.Addr())
+
+	listener_sys, err := listener.SyscallConn()
+	if err != nil {
+		log.WithError(err).Fatal("listener.SyscallConn")
+	}
+
+	listener_sys.Control(func(fd uintptr) {
+		if err := unix.SetsockoptInt(int(fd), syscall.IPPROTO_IP, syscall.IP_TRANSPARENT, 1); err != nil {
+			log.WithError(err).Fatal("SetsockoptInt IP_TRANSPARENT")
+		}
+	})
+
+	for {
+		conn, err := listener.AcceptTCP()
+		if err != nil {
+			log.WithError(err).Fatal("AcceptTCP")
+		}
+		go HandleTCPConnection(conn, atomic.AddInt64(conn_id, 1))
+	}
+}
+
 func main() {
 	flag_verbose := flag.Int("verbose", 0, "Be verbose. 1: debug, 2: trace")
 	flag_port := flag.Int("port", 9999, "Port to listen")
@@ -91,37 +125,9 @@ func main() {
 		TimestampFormat: "15:04:05.000",
 	})
 
-	listenaddr, err := net.ResolveTCPAddr("tcp4", fmt.Sprintf("127.0.0.1:%d", *flag_port))
-	if err != nil {
-		log.WithError(err).Fatal("ResolveTCPAddr")
-	}
-
-	listener, err := net.ListenTCP("tcp4", listenaddr)
-	if err != nil {
-		log.WithError(err).Fatal("ListenTCP")
-	}
-	defer listener.Close()
-	log.Info("Listening on ", listener.Addr())
-
-	listener_sys, err := listener.SyscallConn()
-	if err != nil {
-		log.WithError(err).Fatal("listener.SyscallConn")
-	}
-
-	listener_sys.Control(func(fd uintptr) {
-		if err := unix.SetsockoptInt(int(fd), syscall.IPPROTO_IP, syscall.IP_TRANSPARENT, 1); err != nil {
-			log.WithError(err).Fatal("SetsockoptInt")
-		}
-	})
-
 	var conn_id int64 = 0
-	for {
-		conn, err := listener.AcceptTCP()
-		if err != nil {
-			log.WithError(err).Fatal("AcceptTCP")
-		}
-		conn_id++
-		go HandleTCPConnection(conn, conn_id)
-	}
+	go ServeForever(fmt.Sprintf("127.0.0.1:%d", *flag_port), &conn_id)
+	go ServeForever(fmt.Sprintf("[::1]:%d", *flag_port), &conn_id)
 
+	select {}
 }

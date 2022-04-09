@@ -49,12 +49,11 @@ ip route add local default dev lo scope host
 iptables -t mangle -A PREROUTING -p tcp -s 192.168.0.0/24 -j TPROXY --to-ip 127.0.0.1 --to-port 9999 --tproxy-mark 0x100/0xf00
 iptables -t mangle -A PREROUTING -m socket --transparent -j MARK --set-mark 0x100/0xf00
 
+# IPv6 is also supported, use ip6tables to do similar config
 ```
 
-### Limitations
+### Note
 
-This is a NAT instead of a full transparent proxy. Full transparent
-can be supported using IP_TRANSPARENT in outgoing socket, but I don't need it in my use case.
-It may be supported in the future.
-
-For the same reason, IPv6 is not supported for now.
+This is a NAT instead of a full transparent proxy.
+This is the usual use case for IPv4 anyway.
+It seems that it's impossible to do SNAT after TPROXY ([source](https://lists.balabit.hu/pipermail/tproxy/2007-August/000489.html)
