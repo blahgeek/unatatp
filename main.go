@@ -43,7 +43,7 @@ outer:
 }
 
 // Handle accepted tcp connection. Make a new connection from myself and forward between them
-func HandleTCPConnection(conn *net.TCPConn, conn_id int64) {
+func HandleTCPConnection(conn *net.TCPConn, bind_ip_factory func(net.IP) net.IP, conn_id int64) {
 	defer conn.Close()
 
 	addr_src, addr_src_ok := conn.RemoteAddr().(*net.TCPAddr)
@@ -55,9 +55,9 @@ func HandleTCPConnection(conn *net.TCPConn, conn_id int64) {
 
 	log := log.WithField("src", addr_src).WithField("dst", addr_dst).WithField("id", conn_id)
 
-	log.Debug("New tcp connection, making next connection...")
-
-	conn_next, err := net.DialTCP("tcp", nil, addr_dst)
+	bind_ip := bind_ip_factory(addr_src.IP)
+	log.WithField("bind_ip", bind_ip).Debug("New tcp connection, making next connection...")
+	conn_next, err := net.DialTCP("tcp", &net.TCPAddr{IP: bind_ip}, addr_dst)
 	if err != nil {
 		log.WithError(err).Error("DialTCP")
 		return
@@ -76,7 +76,7 @@ func HandleTCPConnection(conn *net.TCPConn, conn_id int64) {
 	log.Debug("Connection closed")
 }
 
-func ServeForever(listen_addr string, conn_id *int64) {
+func ServeForever(listen_addr string, bind_ip_factory func(net.IP) net.IP, conn_id *int64) {
 	listenaddr, err := net.ResolveTCPAddr("tcp", listen_addr)
 	if err != nil {
 		log.WithError(err).Fatal("ResolveTCPAddr")
@@ -105,14 +105,33 @@ func ServeForever(listen_addr string, conn_id *int64) {
 		if err != nil {
 			log.WithError(err).Fatal("AcceptTCP")
 		}
-		go HandleTCPConnection(conn, atomic.AddInt64(conn_id, 1))
+		go HandleTCPConnection(conn, bind_ip_factory, atomic.AddInt64(conn_id, 1))
 	}
 }
 
 func main() {
 	flag_verbose := flag.Int("verbose", 0, "Be verbose. 1: debug, 2: trace")
 	flag_port := flag.Int("port", 9999, "Port to listen")
+	flag_bind_ipv4 := flag.String("bind_ipv4", "", "IPv4 address to bind for outgoing connection")
+	flag_bind_ipv6_prefix := flag.String("bind_ipv6_prefix", "",
+		"IPv6 prefix to bind for outgoing connection. NOTE: this is a prefix instead of address, it will work like stateless NAT")
 	flag.Parse()
+
+	var bind_ipv4 net.IP
+	if len(*flag_bind_ipv4) > 0 {
+		bind_ipv4 = net.ParseIP(*flag_bind_ipv4)
+		if bind_ipv4 == nil {
+			log.WithField("bind_ipv4", *flag_bind_ipv4).Fatal("Cannot parse ipv4 addr")
+		}
+	}
+
+	var bind_ipv6_prefix *net.IPNet
+	if len(*flag_bind_ipv6_prefix) > 0 {
+		_, bind_ipv6_prefix, _ = net.ParseCIDR(*flag_bind_ipv6_prefix)
+		if bind_ipv6_prefix == nil {
+			log.WithField("bind_ipv6_prefix", *flag_bind_ipv6_prefix).Fatal("Cannot parse ipv6 prefix")
+		}
+	}
 
 	if *flag_verbose >= 2 {
 		log.SetLevel(log.TraceLevel)
@@ -126,8 +145,35 @@ func main() {
 	})
 
 	var conn_id int64 = 0
-	go ServeForever(fmt.Sprintf("127.0.0.1:%d", *flag_port), &conn_id)
-	go ServeForever(fmt.Sprintf("[::1]:%d", *flag_port), &conn_id)
+	go ServeForever(fmt.Sprintf("127.0.0.1:%d", *flag_port),
+		func(source_addr net.IP) net.IP {
+			if bind_ipv4 == nil {
+				return nil
+			}
+			return bind_ipv4
+		}, &conn_id)
+	go ServeForever(fmt.Sprintf("[::1]:%d", *flag_port),
+		func(source_addr net.IP) net.IP {
+			if bind_ipv6_prefix == nil {
+				return nil
+			}
+			prefix_len, _ := bind_ipv6_prefix.Mask.Size()
+			new_addr := make([]byte, 16)
+
+			for i := 0; i < prefix_len/8; i++ {
+				new_addr[i] = bind_ipv6_prefix.IP[i]
+			}
+			if prefix_len < 128 {
+				i := prefix_len / 8
+				m := byte((1 << (8 - (prefix_len % 8))) - 1)
+				new_addr[i] = (bind_ipv6_prefix.IP[i] & ^m) | (source_addr[i] & m)
+			}
+			for i := prefix_len/8 + 1; i < 16; i++ {
+				new_addr[i] = source_addr[i]
+			}
+
+			return new_addr
+		}, &conn_id)
 
 	select {}
 }
